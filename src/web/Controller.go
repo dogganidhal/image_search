@@ -21,6 +21,7 @@ func (controller Controller) GetImagesByKeyword(writer http.ResponseWriter, requ
 	if err != nil {
 		panic(err)
 	}
+	enableCors(&writer)
 }
 
 func (controller Controller) GetImagesByRegex(writer http.ResponseWriter, request *http.Request) {
@@ -33,6 +34,7 @@ func (controller Controller) GetImagesByRegex(writer http.ResponseWriter, reques
 	if err != nil {
 		panic(err)
 	}
+	enableCors(&writer)
 }
 
 func (controller Controller) GetImagesByKeywords(writer http.ResponseWriter, request *http.Request) {
@@ -45,6 +47,7 @@ func (controller Controller) GetImagesByKeywords(writer http.ResponseWriter, req
 	if err != nil {
 		panic(err)
 	}
+	enableCors(&writer)
 }
 
 func extractPagination(request *http.Request) domain.Pagination {
@@ -78,4 +81,8 @@ func extractQuery(slices []string) string {
 	lastUriPath := slices[len(slices)-1]
 	lastUriPathSlices := strings.Split(lastUriPath, "?")
 	return lastUriPathSlices[0]
+}
+
+func enableCors(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 }
