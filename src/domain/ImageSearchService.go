@@ -16,14 +16,12 @@ const (
 
 type ImageSearchService struct{}
 
-func (E ImageSearchService) GetImagesByKeyword(keyword string) []ImageDocument {
+func (E ImageSearchService) GetImagesByKeyword(keyword string, pagination Pagination) PaginatedResource {
 	/* Search Query
 	{
-	  "searchQuery": {
+	  "query": {
 	    "term": {
-	      "label": {
-	        "value": $keyword
-	      }
+	      "label": $keyword
 	    }
 	  }
 	}
@@ -31,63 +29,68 @@ func (E ImageSearchService) GetImagesByKeyword(keyword string) []ImageDocument {
 	searchQuery := map[string]interface{}{
 		"query": map[string]interface{}{
 			"term": map[string]interface{}{
-				"label": map[string]interface{}{
-					"value": keyword,
-				},
+				"label": keyword,
 			},
 		},
 	}
-	hits := executeElasticSearchQuery(imageLabelIndexName, searchQuery)
-	var imageIds []string
-	for _, hit := range hits {
-		imageLabel := hit.(map[string]interface{})["_source"].(map[string]interface{})
-		imageIds = append(imageIds, imageLabel["id"].(string))
-	}
-	/* Fetch Image Query
+	applyPagination(searchQuery, pagination)
+	hits, total := executeElasticSearchQuery(imageLabelIndexName, searchQuery)
+	return fetchImages(hits, pagination, total)
+}
+
+func (E ImageSearchService) GetImagesByRegex(regex string, pagination Pagination) PaginatedResource {
+	/* Regex Query
 	{
-	  "searchQuery": {
-	    "term": {
-	      "id": {
-	        "value": $imageIds
+	  "query": {
+	    "regexp": {
+	      "label": {
+	        "value": $regex,
+	        "flags": "ALL",
+	        "case_insensitive": true
 	      }
 	    }
 	  }
 	}
 	*/
-	fetchImagesQuery := map[string]interface{}{
+	regexQuery := map[string]interface{}{
 		"query": map[string]interface{}{
-			"terms": map[string]interface{}{
-				"id": imageIds,
+			"regexp": map[string]interface{}{
+				"label": map[string]interface{}{
+					"value":            regex,
+					"flags":            "ALL",
+					"case_insensitive": true,
+				},
 			},
 		},
 	}
-	hits = executeElasticSearchQuery(imageIndexName, fetchImagesQuery)
-	var result []ImageDocument
-	for _, hit := range hits {
-		var image ImageDocument
-		imageMap := hit.(map[string]interface{})["_source"]
-		imageJson, err := json.Marshal(imageMap)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		err = json.Unmarshal(imageJson, &image)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		result = append(result, image)
+	applyPagination(regexQuery, pagination)
+	hits, total := executeElasticSearchQuery(imageLabelIndexName, regexQuery)
+	return fetchImages(hits, pagination, total)
+}
+
+func (E ImageSearchService) GetImagesByKeywords(keywords []string, pagination Pagination) PaginatedResource {
+	/* Search Query
+	{
+	  "searchQuery": {
+	    "terms": {
+	      "label": $keyword
+	    }
+	  }
 	}
-	return result
+	*/
+	searchQuery := map[string]interface{}{
+		"query": map[string]interface{}{
+			"terms": map[string]interface{}{
+				"label": keywords,
+			},
+		},
+	}
+	applyPagination(searchQuery, pagination)
+	hits, total := executeElasticSearchQuery(imageLabelIndexName, searchQuery)
+	return fetchImages(hits, pagination, total)
 }
 
-func (E ImageSearchService) GetImagesByRegex(regex string) []ImageDocument {
-	panic("implement me")
-}
-
-func (E ImageSearchService) GetImagesByKeywords(keywords []string) []ImageDocument {
-	panic("implement me")
-}
-
-func executeElasticSearchQuery(index string, query map[string]interface{}) []interface{} {
+func executeElasticSearchQuery(index string, query map[string]interface{}) ([]interface{}, int64) {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{Addresses: []string{esHost}})
 	if err != nil {
 		log.Fatalln(err)
@@ -125,5 +128,60 @@ func executeElasticSearchQuery(index string, query map[string]interface{}) []int
 		log.Fatalf("Error parsing the response body: %s", err)
 	}
 	hits := result["hits"].(map[string]interface{})["hits"]
-	return hits.([]interface{})
+	total := result["hits"].(map[string]interface{})["total"].(map[string]interface{})["value"]
+	return hits.([]interface{}), int64(total.(float64))
+}
+
+func fetchImages(hits []interface{}, pagination Pagination, total int64) PaginatedResource {
+	imageIds := make([]string, 0)
+	for _, hit := range hits {
+		imageLabel := hit.(map[string]interface{})["_source"].(map[string]interface{})
+		imageIds = append(imageIds, imageLabel["id"].(string))
+	}
+	/* Fetch Image Query
+	{
+	  "searchQuery": {
+	    "terms": {
+	      "id": $imageIds
+	    }
+	  }
+	}
+	*/
+	fetchImagesQuery := map[string]interface{}{
+		"size": pagination.Size,
+		"query": map[string]interface{}{
+			"terms": map[string]interface{}{
+				"id": imageIds,
+			},
+		},
+	}
+	hits, _ = executeElasticSearchQuery(imageIndexName, fetchImagesQuery)
+	return extractImageDocuments(hits, pagination, total)
+}
+
+func extractImageDocuments(hits []interface{}, pagination Pagination, total int64) PaginatedResource {
+	items := make([]interface{}, 0)
+	for _, hit := range hits {
+		var image ImageDocument
+		imageMap := hit.(map[string]interface{})["_source"]
+		imageJson, err := json.Marshal(imageMap)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		err = json.Unmarshal(imageJson, &image)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		items = append(items, image)
+	}
+	return PaginatedResource{
+		Total:      total,
+		Pagination: pagination,
+		Items:      items,
+	}
+}
+
+func applyPagination(query map[string]interface{}, pagination Pagination) {
+	query["from"] = pagination.From
+	query["size"] = pagination.Size
 }
